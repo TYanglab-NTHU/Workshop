@@ -1,13 +1,20 @@
 import sys,os
 from rdkit import Chem
 import torch
+import warnings
+from PIL import Image  
+from matplotlib import pyplot as plt, ticker
 sys.path.append('../')
+from rdkit.Chem import MACCSkeys, Draw
 from fast_jtnn.vocab import *
 from fast_jtnn.nnutils import create_var
 from fast_jtnn.datautils import tensorize
 from fast_jtnn.mol_tree import MolTree
 from fast_jtnn.jtprop_vae import JTPropVAE
+from sklearn.preprocessing import StandardScaler  
+import matplotlib.image as mpimg
 import pandas as pd
+warnings.filterwarnings("ignore", category=UserWarning, module="torch.nn.functional")
 hidden_size = 450
 latent_size = 56
 depthT = 20
@@ -44,6 +51,17 @@ class LigandGenerator():
         self.depthT = depthT
         self.depthG = depthG
         self.model = load_model(vocab,hidden_size,latent_size,depthT,depthG)
+    
+    def get_latent(self,ftrain=os.path.join('../fast_molopt/vae_model/latent_train_epoch_99-2'),dim0=0,dim1=1):
+        df = pd.read_csv(ftrain,header=None)
+        df1 = df.iloc[:,1:]
+        scaler = StandardScaler().fit(df1)
+        train_data = scaler.transform(df1)
+        x_train = train_data[:,dim0]
+        y_train = train_data[:,dim1]
+        self.x_train = x_train
+        self.y_train = y_train
+        self.scaler = scaler
         
     def randomgen(self,num=1):
         gensmile = set()
@@ -54,19 +72,30 @@ class LigandGenerator():
             gensmile.add(smi)
         return gensmile
     
+    def get_vector(self,smile=''):
+        smi_target = [smile]
+        tree_batch = [MolTree(smi) for smi in smi_target]
+        _, jtenc_holder, mpn_holder = tensorize(tree_batch, self.vocab, assm=False)
+        tree_vecs, _, mol_vecs = self.model.encode(jtenc_holder, mpn_holder)
+        z_tree_mean = self.model.T_mean(tree_vecs)
+        z_mol_mean = self.model.G_mean(mol_vecs)
+        z_tree_log_var = -torch.abs(self.model.T_var(tree_vecs))
+        z_mol_log_var = -torch.abs(self.model.G_var(mol_vecs))
+        return z_tree_mean,z_mol_mean,z_tree_log_var,z_mol_log_var
+    
+    def get_lfs_from_smi(self,smile):
+        z_tree_mean,z_mol_mean,z_tree_log_var,z_mol_log_var = self.get_vector(smile)
+        lfs_pred = self.model.propNN(torch.cat((z_tree_mean,z_mol_mean),dim=1))
+        lfs_pred = torch.clamp(lfs_pred,min=0,max=1)
+        lfs = lfs_pred.item()
+        return lfs
+    
     def gen_from_target_withoutprop(self,target_smile,numsmiles=5,step_size=0.01):
         if not target_smile:
             raise ValueError('Target smile not defined! Change to random seed')
         decode_smiles_set = set()
-        # decode_smiles_set.add(target_smile)
-        tree_batch = [MolTree(target_smile)]
         target_smile_cheeck = checksmile(target_smile)
-        _, jtenc_holder, mpn_holder = tensorize(tree_batch, vocab, assm=False)
-        tree_vecs, _, mol_vecs = self.model.encode(jtenc_holder, mpn_holder)
-        z_tree_mean = self.model.T_mean(tree_vecs)
-        z_mol_mean = self.model.G_mean(mol_vecs)
-        tree_var = -torch.abs(self.model.T_var(tree_vecs))
-        mol_var = -torch.abs(self.model.G_var(mol_vecs))
+        z_tree_mean,z_mol_mean,tree_var,mol_var = self.get_vector(target_smile)
         count = 0
         while numsmiles >= len(decode_smiles_set):
             epsilon_tree = create_var(torch.randn_like(z_tree_mean))
@@ -80,114 +109,107 @@ class LigandGenerator():
             if count > numsmiles :
                 step_size += 0.01
                 count = 0
-                
         return decode_smiles_set
     
-def get_lfs_from_smi(self,smile):
-    self.get_vector(smile)
-    # z_mol_log_var = -torch.abs(model.G_var(mol_vecs))
-    lfs = self.model.propNN(torch.cat((self.z_tree_mean,self.z_mol_mean),dim=1))
-    lfs = lfs.item()
-    return lfs
-
-# def gen_target_smi(self,LFS_target,smile='',step_size=0.1,sign=1):
-#     LFS_target = check_input(LFS_target)
-#     if 0 <= LFS_target <= 1:
-#         flag = True
-#         while flag:
-#             smis,zs,ps = [],[],[]
-#             smis_,pro = [],[]
-#             count,ploss = 0,1
-#             lfs = self.get_lfs_from_smi(smile)
-#             if lfs - LFS_target > 0.3:
-#                 print('\nWarning! Input smile lfs is %.3f, but target lfs is %s.\nPredict lfs might unconfident!'%(lfs.item(),LFS_target))
-#                 checkpoint = input('Continue?[y/n]\n')
-#                 if checkpoint.lower() == 'n':
-#                     flag = False
-#                     break
-#             while ploss > 0.1:
-#                 if count == 0:
-#                     epsilon_tree = create_var(torch.randn_like(self.z_tree_mean))
-#                     epsilon_mol = create_var(torch.randn_like(self.z_mol_mean))
-#                     z_tree_mean_new = self.z_tree_mean + torch.exp(self.z_tree_log_var / 2) * epsilon_tree * step_size
-#                     z_mol_mean_new = self.z_mol_mean + torch.exp(self.z_mol_log_var / 2) * epsilon_mol * step_size
-#                     z_tree_mean = self.z_tree_mean
-#                     z_mol_mean = self.z_mol_mean
-#                     count += 1
-#                 lfs_new = self.model.propNN(torch.cat((z_tree_mean_new, z_mol_mean_new),dim=1))
-#                 ploss = abs(lfs_new.item() - LFS_target)
-#                 print(ploss)
-#                 if ploss > 1:
-#                     count = 0
-#                     self.get_lfs_from_smi(smile)
-#                     zs,ps = [],[]
-#                     continue
-#                 delta_tree = sign * step_size * (lfs_new - lfs)/(z_tree_mean_new - z_tree_mean)
-#                 delta_mol = sign * step_size * (lfs_new - lfs)/(z_mol_mean_new - z_mol_mean)
-#                 lfs = lfs_new
-#                 z_tree_mean = (z_tree_mean_new)
-#                 z_mol_mean = (z_mol_mean_new)
-#                 z_tree_mean_new = z_tree_mean + delta_tree
-#                 z_mol_mean_new = z_mol_mean + delta_mol
-#             zs.append([z_tree_mean,z_mol_mean]) 
-#             ps.append(lfs_new)
-#             decode_loss = ''
-#             smis = [self.model.decode(*z, prob_decode=False) for z in zs]
-#             for i,j in zip(smis,ps):
-#                 if i != smile:
-#                     smis_.append(i)
-#                     pro.append(j.item())
-#                     decode_loss = abs(self.get_lfs_from_smi(i) - j.item())
-#             if smis_ != []:
-#                 if decode_loss < 0.2:
-#                     flag = False
-                        
-#         return smis_, pro, decode_loss
-#     else:
-#         raise ValueError('target LFS must between 0~1 !')
+    def scatter_plot(self,df,smi,dim1=0, dim2=1):
+        mol = Chem.MolFromSmiles(smi)
+        img = Draw.MolsToGridImage([mol],molsPerRow=1)
+        png = img.data
+        with open(os.path.join('../','data','%s.png'%smi),'wb+') as outf:
+            outf.write(png)
+        image = Image.open(os.path.join('../','data','%s.png'%smi))
+        fig, axes = plt.subplots(1,2, figsize=(8, 6))  # (rows, columns, figsize)
+        self.get_latent()
+        xmin, xmax = -5, 5
+        ymin, ymax = -5, 5
+        xmajor, xminor = 2.5, 1.25
+        ymajor, yminor = 2.5, 1.25
+        df = pd.DataFrame(df)
+        train_data = self.scaler.transform(df)
     
+        xlabel = 'Z(%s)' % dim1
+        ylabel = 'Z(%s)' % dim2
+        axes[0].set_position([0.1, 0.1,0.8, 1.0])  # [left, bottom, width, height]
+        axes[1].set_position([1, 0.5, 0.3, 0.4])  # [left, bottom, width, height]
+        axes[1].imshow(image)  # 第二個子圖的資料
+        axes[0].scatter(self.x_train, self.y_train, c='black', s=0.5, edgecolors='black', alpha=0.2)
+        axes[0].scatter(train_data[0][dim1],train_data[0][dim2],c='orange', s=30, edgecolors='black', alpha=1)
 
-# if __name__ == '__main__':
-#     model = LFSgenerator()
-#     smis = ['C#N','CC#N']
-#     # lfs = model.get_lfs_from_smi('C#N')
-#     tree_batch = []
-#     for smi in smis:
-#         mol_tree = MolTree(smi)
-#         mol_tree.recover()
-#         mol_tree.assemble()
-#         for node in mol_tree.nodes:
-#             if node.label not in node.cands:
-#                 node.cands.append(node.label)
-#         del mol_tree.mol
-#         for node in mol_tree.nodes:
-#             del node.mol
-#         tree_batch.append(mol_tree)
-#     model.restore()
-    
-#     model_ = model.model
-#     model_.cuda()
+        axes[0].xaxis.set_major_locator(ticker.MultipleLocator(xmajor))
+        axes[0].xaxis.set_minor_locator(ticker.MultipleLocator(xminor))
+        axes[0].yaxis.set_major_locator(ticker.MultipleLocator(ymajor))
+        axes[0].yaxis.set_minor_locator(ticker.MultipleLocator(yminor))
+        plt.xticks(fontsize=16)
+        plt.yticks(fontsize=16)
+        axes[0].set_xlim(xmin, xmax)
+        axes[0].set_ylim(ymin, ymax)
+        axes[0].set_xlabel(xlabel, fontsize=16)
+        axes[0].set_ylabel(ylabel, fontsize=16)
+        
+        
+    def LFS_optimization(self,LFS_target,inputsmile='',step_size=0.1,sign=-1):
+        print('Optimizaiotn Start')
+        LFS_target = check_input(LFS_target)
+        inputsmicheck = checksmile(inputsmile)
+        if 0 <= LFS_target <= 1:
+            flag = True
+            while flag:
+                smis,zs,ps = [],[],[]
+                smis_,pro = [],[]
+                count,ploss = 0,1
+                lfs = self.get_lfs_from_smi(inputsmile)
+                if lfs - LFS_target > 0.3:
+                    print('\nWarning! Input smile lfs is %.3f, but target lfs is %s.\nPredict lfs might unconfident!'%(lfs.item(),LFS_target))
+                    checkpoint = input('Continue?[y/n]\n')
+                    if checkpoint.lower() == 'n':
+                        flag = False
+                        break
+                while ploss > 0.1:
+                    if count == 0:
+                        z_tree_mean,z_mol_mean,tree_var,mol_var = self.get_vector(inputsmile)
+                        epsilon_tree = create_var(torch.randn_like(tree_var))
+                        epsilon_mol = create_var(torch.randn_like(mol_var))
+                        z_tree_mean_new = z_tree_mean + torch.exp(tree_var / 2) * epsilon_tree * step_size
+                        z_mol_mean_new = z_mol_mean + torch.exp(mol_var / 2) * epsilon_mol * step_size
+                        count += 1
+                    lfs_new = self.model.propNN(torch.cat((z_tree_mean_new, z_mol_mean_new),dim=1))
+                    lfs_new = torch.clamp(lfs_new,min=0,max=1).item()
+                    ploss = abs(lfs_new - LFS_target)
+                    if ploss > 0.5:
+                        count = 0
+                        z_tree_mean,z_mol_mean,tree_var,mol_var = self.get_vector(inputsmile)
+                        zs,ps = [],[]
+                        continue
+                    delta_tree = sign * step_size * (lfs_new - LFS_target)/(z_tree_mean_new - z_tree_mean)
+                    delta_mol = sign * step_size * (lfs_new - LFS_target)/(z_mol_mean_new - z_mol_mean)
+                    lfs = lfs_new
+                    z_tree_mean = (z_tree_mean_new)
+                    z_mol_mean = (z_mol_mean_new)
+                    z_tree_mean_new = z_tree_mean + delta_tree
+                    z_mol_mean_new = z_mol_mean + delta_mol
+                    smi = self.model.decode(z_tree_mean_new,z_mol_mean_new, prob_decode=False)
+                    if smi != None:
+                        decode_loss = abs(self.get_lfs_from_smi(smi) - lfs_new)
+                        if decode_loss < 0.2:
+                            if smi == inputsmile or smi == inputsmicheck:
+                                step_size += 0.1
+                                smis.append(smi)
+                            else:
+                                yield (smi,torch.cat((z_tree_mean,z_mol_mean),dim=1).tolist())
+                                smis.append(smi)
+                                zs.append([z_tree_mean,z_mol_mean]) 
+                                ps.append(lfs_new)
+                                flag = False
+                        else:
+                            ploss = 1
+                            count = 0
+                            step_size += 0.1
+            return smis,ps
+        else:
+            raise ValueError('target LFS must between 0~1 !')
 
-#     mol_batch = datautils.tensorize(tree_batch,model.vocab)
-#     x_batch, x_jtenc_holder, x_mpn_holder, x_jtmpn_holder = mol_batch
-#     x_tree_vecs, tree_message, x_mol_vecs = model_.encode(x_jtenc_holder,x_mpn_holder)
-#     z_tree_vecs, tree_kl = model_.rsample(x_tree_vecs, model_.T_mean, model_.T_var)
-#     z_mol_vecs, mol_kl = model_.rsample(x_mol_vecs, model_.G_mean, model_.G_var)
-    
-    
-    
-#     assm_loss, assm_acc = model_.assm(x_batch, x_jtmpn_holder, z_mol_vecs, tree_message)
-#     jtmpn_holder,batch_idx = x_jtmpn_holder
-#     fatoms,fbonds,agraph,bgraph,scope = jtmpn_holder
-#     batch_idx = create_var(batch_idx)
-#     cands_vecs = model_.jtmpn(fatoms,fbonds,agraph,bgraph,scope,tree_message)
-#     x_mol_vecs = x_mol_vecs.index_select(0, batch_idx)
-
-#     x_mol_vecs = model_.A_assm(z_mol_vecs) #bilinear
-
-    
-
-
-#     cand_vecs = model_.jtmpn(fatoms, fbonds, agraph, bgraph, scope, x_tree_mess)
-
-
+if __name__ == '__main__':
+    generator = LigandGenerator()
+    lfs_optimizaiotn = generator.LFS_optimization(0.3,'c1ccccc1')
+    for opt in lfs_optimizaiotn:
+        print(opt)
