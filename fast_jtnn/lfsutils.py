@@ -132,6 +132,9 @@ class LigandGenerator():
         axes[0].set_position([0.1, 0.1,0.8, 1.0])  # [left, bottom, width, height]
         axes[1].set_position([1, 0.5, 0.3, 0.4])  # [left, bottom, width, height]
         axes[1].imshow(image)  # 第二個子圖的資料
+        # for i in ['top', 'bottom', 'left', 'right']:
+        #     axes[1].spines[i].set_visible(0)
+        axes[1].axis('off')
         axes[0].scatter(self.x_train, self.y_train, c='black', s=0.5, edgecolors='black', alpha=0.2)
         axes[0].scatter(train_data[0][dim1],train_data[0][dim2],c='orange', s=30, edgecolors='black', alpha=1)
 
@@ -145,9 +148,9 @@ class LigandGenerator():
         axes[0].set_ylim(ymin, ymax)
         axes[0].set_xlabel(xlabel, fontsize=16)
         axes[0].set_ylabel(ylabel, fontsize=16)
+        plt.show()
         
-        
-    def LFS_optimization(self,LFS_target,inputsmile='',step_size=0.1,sign=-1):
+    def LFS_optimization(self,LFS_target,inputsmile='',step_size=0.01,sign=1):
         print('Optimizaiotn Start')
         LFS_target = check_input(LFS_target)
         inputsmicheck = checksmile(inputsmile)
@@ -156,54 +159,63 @@ class LigandGenerator():
             while flag:
                 smis,zs,ps = [],[],[]
                 smis_,pro = [],[]
-                count,ploss = 0,1
+                count,ploss = 0,1.0
                 lfs = self.get_lfs_from_smi(inputsmile)
-                if lfs - LFS_target > 0.3:
-                    print('\nWarning! Input smile lfs is %.3f, but target lfs is %s.\nPredict lfs might unconfident!'%(lfs.item(),LFS_target))
-                    checkpoint = input('Continue?[y/n]\n')
-                    if checkpoint.lower() == 'n':
-                        flag = False
-                        break
-                while ploss > 0.1:
+                t = 0
+                # if abs(lfs - LFS_target) > 0.3:
+                #     print('\nWarning! Input smile lfs is %.3f, but target lfs is %s.\nPredict lfs might not be trust-worthy!'%(lfs,LFS_target))
+                #     checkpoint = input('Continue?[y/n]\n')
+                #     if checkpoint.lower() == 'n':
+                #         flag = False
+                #         break
+                while ploss > 0.1 and type(ploss) == float:
                     if count == 0:
                         z_tree_mean,z_mol_mean,tree_var,mol_var = self.get_vector(inputsmile)
                         epsilon_tree = create_var(torch.randn_like(tree_var))
                         epsilon_mol = create_var(torch.randn_like(mol_var))
+                        lfs = self.model.propNN(torch.cat((z_tree_mean, z_mol_mean),dim=1))
+                        lfs = torch.clamp(lfs,min=0,max=1).item()
                         z_tree_mean_new = z_tree_mean + torch.exp(tree_var / 2) * epsilon_tree * step_size
                         z_mol_mean_new = z_mol_mean + torch.exp(mol_var / 2) * epsilon_mol * step_size
                         count += 1
                     lfs_new = self.model.propNN(torch.cat((z_tree_mean_new, z_mol_mean_new),dim=1))
                     lfs_new = torch.clamp(lfs_new,min=0,max=1).item()
                     ploss = abs(lfs_new - LFS_target)
+                    print('Ploss is %s.' %(ploss))
                     if ploss > 0.5:
                         count = 0
                         z_tree_mean,z_mol_mean,tree_var,mol_var = self.get_vector(inputsmile)
                         zs,ps = [],[]
                         continue
-                    delta_tree = sign * step_size * (lfs_new - LFS_target)/(z_tree_mean_new - z_tree_mean)
-                    delta_mol = sign * step_size * (lfs_new - LFS_target)/(z_mol_mean_new - z_mol_mean)
+                    delta_tree = sign * step_size * (lfs_new - lfs) / (z_tree_mean_new - z_tree_mean) / torch.sqrt(torch.Tensor([t+1])) * (1 - 2 * (lfs_new - LFS_target))
+                    delta_mol = sign * step_size * (lfs_new - lfs) / (z_mol_mean_new - z_mol_mean) / torch.sqrt(torch.Tensor([t+1])) * (1 - 2 * (lfs_new - LFS_target))
+                    print(delta_tree)
                     lfs = lfs_new
                     z_tree_mean = (z_tree_mean_new)
                     z_mol_mean = (z_mol_mean_new)
                     z_tree_mean_new = z_tree_mean + delta_tree
                     z_mol_mean_new = z_mol_mean + delta_mol
-                    smi = self.model.decode(z_tree_mean_new,z_mol_mean_new, prob_decode=False)
-                    if smi != None:
-                        decode_loss = abs(self.get_lfs_from_smi(smi) - lfs_new)
-                        if decode_loss < 0.2:
-                            if smi == inputsmile or smi == inputsmicheck:
-                                step_size += 0.1
-                                smis.append(smi)
-                            else:
-                                yield (smi,torch.cat((z_tree_mean,z_mol_mean),dim=1).tolist())
-                                smis.append(smi)
-                                zs.append([z_tree_mean,z_mol_mean]) 
-                                ps.append(lfs_new)
-                                flag = False
-                        else:
-                            ploss = 1
-                            count = 0
+                    t += 1
+                print('Found a hit, decoding...')
+                smi = self.model.decode(z_tree_mean_new,z_mol_mean_new, prob_decode=False)
+                if smi != None:
+                    decode_loss = abs(self.get_lfs_from_smi(smi) - lfs_new)
+                    if decode_loss < 0.2:
+                        if smi == inputsmile or smi == inputsmicheck:
                             step_size += 0.1
+                            smis.append(smi)
+                        else:
+                            yield (smi,torch.cat((z_tree_mean,z_mol_mean),dim=1).tolist())
+                            smis.append(smi)
+                            zs.append([z_tree_mean,z_mol_mean]) 
+                            ps.append(lfs_new)
+                            flag = False
+                    else:
+                        ploss = 1
+                        count = 0
+                        step_size += 0.1
+                else:
+                    ploss = 1
             return smis,ps
         else:
             raise ValueError('target LFS must between 0~1 !')
