@@ -11,7 +11,8 @@ from fast_jtnn.nnutils import create_var
 from fast_jtnn.datautils import tensorize
 from fast_jtnn.mol_tree import MolTree
 from fast_jtnn.jtprop_vae import JTPropVAE
-from sklearn.preprocessing import StandardScaler  
+from torch.nn import CosineSimilarity
+from sklearn.preprocessing import StandardScaler
 import matplotlib.image as mpimg
 import pandas as pd
 warnings.filterwarnings("ignore", category=UserWarning, module="torch.nn.functional")
@@ -151,8 +152,11 @@ class LigandGenerator():
         axes[0].set_ylabel(ylabel, fontsize=16)
         plt.show()
         
-    def LFS_optimization(self,LFS_target,inputsmile='',step_size=0.02,sign=-1,max_cycle=30):
+    def LFS_optimization(self,LFS_target,inputsmile='',step_size=0.02,sign=-1,max_cycle=30,train_file='../data/latent_train_epoch_99-2.csv'):
         print('Running optimizaiotn...')
+        cos = CosineSimilarity(dim=1)
+        df = pd.read_csv(train_file,header=None)
+        zs_ref = torch.Tensor(df.iloc[:,1:].values)
         LFS_target = check_input(LFS_target)
         inputsmicheck = checksmile(inputsmile)
         if 0 <= LFS_target <= 1:
@@ -206,33 +210,38 @@ class LigandGenerator():
                     z_mol_mean_new = z_mol_mean + delta_mol
                     t += 1
                     count += 1
-                    zs.append((z_tree_mean,z_mol_mean))
-                    ps.append(lfs)
+                    similarity = cos(torch.cat((z_tree_mean,z_mol_mean),dim=1), zs_ref).max().item()
+                    if 0.5 < similarity < 1:
+                        # print('Similarity is %s.' %(similarity))
+                        zs.append((z_tree_mean,z_mol_mean))
+                        ps.append(lfs)
                     if len(ps) > max_cycle or math.isnan(ploss):
                         step_size *= 2
                         break
-                if ploss <= ploss_threshold:
-                    flag = False
-            print('Start decoding...')
-            smis = [self.model.decode(*z, prob_decode=False) for z in zs]
-            smis_uniq = []
-            idxes = []
-            for i, smi in enumerate(smis[::-1]):
-                if smi not in smis_uniq:
-                    smis_uniq.append(smi)
-                    idxes.append(len(smis)-1-i)
-            if len(smis_uniq) > 1 and inputsmile not in smis_uniq:
-                # yield (smi,torch.cat((z_tree_mean,z_mol_mean),dim=1).tolist())
-                zs = [torch.cat(z,dim=1).tolist() for z in zs]
-                zs = [zs[idx] for idx in idxes[::-1]]
-                smis = smis_uniq[::-1]
-                ps = [ps[idx] for idx in idxes[::-1]]
-                flag = False
-                return smis, zs, ps
-            else:
-                print('Warning! Input smiles is the output smiles!')
-                ploss = 1.0
-                count = 0
+                if (ps[-1] - LFS_target) < ploss_threshold:
+                    print('Start decoding...')
+                    smis = [self.model.decode(*z, prob_decode=False) for z in zs]
+                    smis_uniq = []
+                    idxes = []
+                    for i, smi in enumerate(smis[::-1]):
+                        if smi not in smis_uniq:
+                            smis_uniq.append(smi)
+                            idxes.append(len(smis)-1-i)
+                    if len(smis_uniq) > 1 and inputsmile not in smis_uniq:
+                        # yield (smi,torch.cat((z_tree_mean,z_mol_mean),dim=1).tolist())
+                        zs = [torch.cat(z,dim=1).tolist() for z in zs]
+                        zs = [zs[idx] for idx in idxes[::-1]]
+                        smis = smis_uniq[::-1]
+                        ps = [ps[idx] for idx in idxes[::-1]]
+                        return smis, zs, ps
+                    elif inputsmile in smis_uniq:
+                        print('Warning! Input smiles is the output smiles!')
+                    elif None in smis_uniq:
+                        print('Output smiles failure')
+                    else:
+                        print('There are fewer than 2 molecules found. Restarting...')
+                else:
+                    print('The error of the last LFS value is %.2f, which is larger than the threshold 0.05. Restarting...' %(ps[-1] - LFS_target))
         else:
             raise ValueError('target LFS must between 0~1 !')
 
