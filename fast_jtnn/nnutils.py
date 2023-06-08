@@ -5,9 +5,9 @@ from torch.autograd import Variable
 
 def create_var(tensor, requires_grad=None):#,gen=True):
     if requires_grad is None:
-        return Variable(tensor)#.cuda()
+        return Variable(tensor).cuda()
     else:
-        return Variable(tensor, requires_grad=requires_grad)#.cuda()
+        return Variable(tensor, requires_grad=requires_grad).cuda()
 
 def index_select_ND(source, dim, index):
     index_size = index.size()

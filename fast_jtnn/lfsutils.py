@@ -34,9 +34,10 @@ def check_input(input):
     
 def load_model(vocab=vocab,hidden_size=hidden_size,latent_size=latent_size,depthT=depthT,depthG=depthG):
     model = JTPropVAE(vocab, int(hidden_size), int(latent_size),int(depthT), int(depthG))
-    dict_buffer = torch.load(model_path, map_location='cpu')
+    dict_buffer = torch.load(model_path, map_location='cuda:0')
     model.load_state_dict(dict_buffer)
     model.eval()
+    model.cuda()
     return model
 def checksmile(smi):
     mol = Chem.MolFromSmiles(smi)
@@ -67,8 +68,8 @@ class LigandGenerator():
     def randomgen(self,num=1):
         gensmile = set()
         while len(gensmile) < num:
-            z_tree = torch.randn(1, self.latent_size // 2)
-            z_mol = torch.randn(1, self.latent_size  // 2)
+            z_tree = torch.randn(1, self.latent_size // 2).cuda()
+            z_mol = torch.randn(1, self.latent_size  // 2).cuda()
             smi = self.model.decode(z_tree, z_mol, prob_decode=False)
             gensmile.add(smi)
         return gensmile
@@ -78,15 +79,15 @@ class LigandGenerator():
         tree_batch = [MolTree(smi) for smi in smi_target]
         _, jtenc_holder, mpn_holder = tensorize(tree_batch, self.vocab, assm=False)
         tree_vecs, _, mol_vecs = self.model.encode(jtenc_holder, mpn_holder)
-        z_tree_mean = self.model.T_mean(tree_vecs)
-        z_mol_mean = self.model.G_mean(mol_vecs)
-        z_tree_log_var = -torch.abs(self.model.T_var(tree_vecs))
-        z_mol_log_var = -torch.abs(self.model.G_var(mol_vecs))
+        z_tree_mean = self.model.T_mean(tree_vecs).cuda()
+        z_mol_mean = self.model.G_mean(mol_vecs).cuda()
+        z_tree_log_var = -torch.abs(self.model.T_var(tree_vecs)).cuda()
+        z_mol_log_var = -torch.abs(self.model.G_var(mol_vecs)).cuda()
         return z_tree_mean,z_mol_mean,z_tree_log_var,z_mol_log_var
     
     def get_lfs_from_smi(self,smile):
         z_tree_mean,z_mol_mean,z_tree_log_var,z_mol_log_var = self.get_vector(smile)
-        lfs_pred = self.model.propNN(torch.cat((z_tree_mean,z_mol_mean),dim=1))
+        lfs_pred = self.model.propNN(torch.cat((z_tree_mean.cuda(),z_mol_mean.cuda()),dim=1))
         lfs_pred = torch.clamp(lfs_pred,min=0,max=1)
         lfs = lfs_pred.item()
         return lfs
@@ -152,13 +153,14 @@ class LigandGenerator():
         axes[0].set_ylabel(ylabel, fontsize=16)
         plt.show()
         
-    def LFS_optimization(self,LFS_target,inputsmile='',step_size=0.02,sign=-1,max_cycle=30,train_file='../data/latent_train_epoch_99-2.csv'):
+    def LFS_optimization(self,LFS_target,inputsmile='',step_size=0.06,sign=-1,max_cycle=100,train_file='../data/latent_train_epoch_99-2.csv'):
         print('Running optimizaiotn...')
-        cos = CosineSimilarity(dim=1)
+        # cos = CosineSimilarity(dim=1)
         df = pd.read_csv(train_file,header=None)
-        zs_ref = torch.Tensor(df.iloc[:,1:].values)
+        zs_ref = torch.Tensor(df.iloc[:,1:].values).cuda()
         LFS_target = check_input(LFS_target)
         inputsmicheck = checksmile(inputsmile)
+        # output = []
         if 0 <= LFS_target <= 1:
             flag = True
             while flag:
@@ -188,18 +190,9 @@ class LigandGenerator():
                     lfs_new = self.model.propNN(torch.cat((z_tree_mean_new, z_mol_mean_new),dim=1))
                     lfs_new = torch.clamp(lfs_new,min=0,max=1).item()
                     ploss = abs(lfs_new - LFS_target)
-                    # print('LFS value is %s. Ploss is %s.' %(lfs_new, ploss))
-                    # if ploss > 0.5:
-                    #     count = 0
-                    #     z_tree_mean,z_mol_mean,tree_var,mol_var = self.get_vector(inputsmile)
-                    #     zs,ps = [],[]
-                    #     continue
-                    # if count == 10:
-                    #     if ploss > abs(lfs - LFS_target):
-                    #         sign = 1
-                    #         print('Switching sign.')
-                    delta_tree = sign * step_size * 2 * (lfs_new - LFS_target) * (lfs_new - lfs) / delta_tree / torch.sqrt(torch.Tensor([t+1])) 
-                    delta_mol = sign * step_size * 2 * (lfs_new - LFS_target) * (lfs_new - lfs) / delta_mol / torch.sqrt(torch.Tensor([t+1])) 
+                    print(ploss)
+                    delta_tree = sign * step_size * 2 * (lfs_new - LFS_target) * (lfs_new - lfs) / delta_tree / torch.sqrt(torch.Tensor([t+1]).cuda()) 
+                    delta_mol = sign * step_size * 2 * (lfs_new - LFS_target) * (lfs_new - lfs) / delta_mol / torch.sqrt(torch.Tensor([t+1]).cuda()) 
                     # delta_tree = sign * step_size * ((lfs_new - lfs) / (z_tree_mean_new - z_tree_mean) * (1 + 2 * (lfs_new - LFS_target)) + 2 * (lfs_new - LFS_target) * (lfs - LFS_target) / (z_tree_mean_new - z_tree_mean)) # / torch.sqrt(torch.Tensor([t+1])) 
                     # delta_mol = sign * step_size * ((lfs_new - lfs) / (z_mol_mean_new - z_mol_mean) * (1 + 2 * (lfs_new - LFS_target)) + 2 * (lfs_new - LFS_target) * (lfs - LFS_target) / (z_mol_mean_new - z_mol_mean)) # / torch.sqrt(torch.Tensor([t+1])) 
                     # print(delta_tree[0])
@@ -210,43 +203,51 @@ class LigandGenerator():
                     z_mol_mean_new = z_mol_mean + delta_mol
                     t += 1
                     count += 1
-                    similarity = cos(torch.cat((z_tree_mean,z_mol_mean),dim=1), zs_ref).max().item()
-                    if 0.5 < similarity < 1:
-                        # print('Similarity is %s.' %(similarity))
-                        zs.append((z_tree_mean,z_mol_mean))
-                        ps.append(lfs)
+                    zs.append((z_tree_mean,z_mol_mean))
+                    ps.append(lfs)
                     if len(ps) > max_cycle or math.isnan(ploss):
-                        step_size *= 2
-                        break
-                if (ps[-1] - LFS_target) < ploss_threshold:
-                    print('Start decoding...')
-                    smis = [self.model.decode(*z, prob_decode=False) for z in zs]
-                    smis_uniq = []
-                    idxes = []
-                    for i, smi in enumerate(smis[::-1]):
-                        if smi not in smis_uniq:
-                            smis_uniq.append(smi)
-                            idxes.append(len(smis)-1-i)
-                    if len(smis_uniq) > 1 and inputsmile not in smis_uniq:
-                        # yield (smi,torch.cat((z_tree_mean,z_mol_mean),dim=1).tolist())
-                        zs = [torch.cat(z,dim=1).tolist() for z in zs]
-                        zs = [zs[idx] for idx in idxes[::-1]]
-                        smis = smis_uniq[::-1]
-                        ps = [ps[idx] for idx in idxes[::-1]]
-                        return smis, zs, ps
-                    elif inputsmile in smis_uniq:
-                        print('Warning! Input smiles is the output smiles!')
-                    elif None in smis_uniq:
-                        print('Output smiles failure')
-                    else:
-                        print('There are fewer than 2 molecules found. Restarting...')
+                        step_size += 0.01
+                        count,ploss = 0,1 
+                        zs,ps = [],[]
+                          
+                if ps != []:
+                    if (ps[-1] - LFS_target) < ploss_threshold:
+                        print('Start decoding...')
+                        smis = [self.model.decode(*z, prob_decode=False) for z in zs]
+                        smis_uniq = []
+                        idxes = []
+                        for i, smi in enumerate(smis[::-1]):
+                            if smi not in smis_uniq and smi != inputsmicheck:
+                                smis_uniq.append(smi)
+                                idxes.append(len(smis)-1-i)
+                        if len(smis_uniq) > 1 and inputsmile not in smis_uniq:
+                            # yield (smi,torch.cat((z_tree_mean,z_mol_mean),dim=1).tolist())
+                            zs = [torch.cat(z,dim=1).tolist() for z in zs]
+                            zs = [zs[idx] for idx in idxes[::-1]]
+                            smis = smis_uniq[::-1]
+                            ps = [ps[idx] for idx in idxes[::-1]]
+                            return smis, zs, ps
+                        elif inputsmile in smis_uniq:
+                            zs,ps = [],[]
+                            count,ploss = 0,1 
+                            print('Warning! Input smiles is the output smiles!')
+                        elif None in smis_uniq:
+                            zs,ps = [],[]
+                            count,ploss = 0,1 
+                            print('Output smiles failure')
+                        else:
+                            zs,ps = [],[]
+                            count,ploss = 0,1 
+                            print('There are fewer than 2 molecules found. Restarting...')
                 else:
-                    print('The error of the last LFS value is %.2f, which is larger than the threshold 0.05. Restarting...' %(ps[-1] - LFS_target))
+                    count,ploss = 0, 1
+                    zs,ps = [],[]
+
         else:
             raise ValueError('target LFS must between 0~1 !')
 
 if __name__ == '__main__':
     generator = LigandGenerator()
-    lfs_optimizaiotn = generator.LFS_optimization(0.3,'c1ccccc1')
+    lfs_optimizaiotn = generator.LFS_optimization(0.4,'C#N')
     for opt in lfs_optimizaiotn:
         print(opt)
