@@ -1,4 +1,4 @@
-import sys,os, math
+import sys,os, math,json
 from rdkit import Chem
 import torch
 import warnings
@@ -15,6 +15,8 @@ from torch.nn import CosineSimilarity
 from sklearn.preprocessing import StandardScaler
 import matplotlib.image as mpimg
 import pandas as pd
+import numpy as np
+from scipy.stats import gaussian_kde
 warnings.filterwarnings("ignore", category=UserWarning, module="torch.nn.functional")
 hidden_size = 450
 latent_size = 56
@@ -44,7 +46,13 @@ def checksmile(smi):
     Chem.Kekulize(mol)
     smi = Chem.MolToSmiles(mol,kekuleSmiles=True,isomericSmiles=True)
     return smi
-    
+
+def highlight_strength(x):
+    df_color = pd.DataFrame('', index=x.index, columns=x.columns)
+    df_color['Spectrochemical series'] = ['background-color: red' if val == 'phen' or val == 'N₃⁻' else '' for val in x['']]
+    return df_color
+
+
 class LigandGenerator():
     def __init__(self,vocab=vocab,hidden_size=hidden_size,latent_size=latent_size,depthT=depthT,depthG=depthG):
         self.vocab = vocab
@@ -99,7 +107,7 @@ class LigandGenerator():
         target_smile_cheeck = checksmile(target_smile)
         z_tree_mean,z_mol_mean,tree_var,mol_var = self.get_vector(target_smile)
         count = 0
-        while numsmiles >= len(decode_smiles_set):
+        while len(decode_smiles_set) < numsmiles :
             epsilon_tree = create_var(torch.randn_like(z_tree_mean))
             epsilon_mol = create_var(torch.randn_like(z_mol_mean))
             z_tree_mean_new = z_tree_mean + torch.exp(tree_var / 2) * epsilon_tree * step_size
@@ -112,6 +120,29 @@ class LigandGenerator():
                 step_size += 0.01
                 count = 0
         return decode_smiles_set
+    
+   
+    def LFS_metric(self):
+        data = [
+        ['H\u2082O', '0.943', 'Weak'],
+        ['Cl\u207B', '0.917', 'Weak'],
+        ['OH\u207B', '0.889', 'Weak'],
+        ['phen', '0.85', 'Strong'],
+        ['\u2013N=C=S', '0.786', 'Weak'],
+        ['F\u207B', '0.528', 'Weak'],
+        ['MeCN', '0.484', 'Intermediate'],
+        ['Py', '0.639', 'Intermediate'],
+        ['en', '0.429', 'Strong'],
+        ['N\u2083\u207B', '0.420', 'Weak'],
+        ['CO', '0.202', 'Strong'],
+        ['NH\u2083', '0.077', 'Strong'],
+        ['\u2013NO\u2082', '0.045', 'Strong'],
+        ['PPh\u2083', '0.029', 'Strong'],
+        ['CN\u207B', '0', 'Strong']
+        ]
+        df = pd.DataFrame(data, columns=['', 'LFS metric', 'Spectrochemical series'])
+        styled_df = df.style.apply(highlight_strength, axis=None)
+        return styled_df
     
     def scatter_plot(self,df,smi,p,dim1=0, dim2=1):
         mol = Chem.MolFromSmiles(smi)
@@ -151,6 +182,127 @@ class LigandGenerator():
         axes[0].set_ylim(ymin, ymax)
         axes[0].set_xlabel(xlabel, fontsize=16)
         axes[0].set_ylabel(ylabel, fontsize=16)
+        plt.show()
+        
+    def density_plot(self):
+        num = [0,40,99]
+        files = ['../data/latent/withlfs_vecs_epoch_%s' %i for i in num]
+        files += ['../data/latent/Without_lfs_vecs_epoch_%s' %i for i in num]
+        dim1 = 0
+        dim2 = 1
+        fig, axs = plt.subplots(2,3, figsize=(20, 14))
+        axs = axs.flatten()
+
+        for i, file in enumerate(files):
+            epoch = file.split('_')[-1]
+            df = pd.read_csv(file, header=0)
+            df1 = df.iloc[:, 1:]
+            scaler = StandardScaler().fit(df1)
+            train_data = scaler.transform(df1)
+            x_pca_train = train_data
+            x_train = x_pca_train[:, dim1]
+            y_train = x_pca_train[:, dim2]
+            xy = np.vstack([x_pca_train[:,dim1],x_pca_train[:,dim2]])
+            z_train = gaussian_kde(xy)(xy)
+            idx = z_train.argsort()
+            x_train = x_pca_train[:,dim1]
+            y_train = x_pca_train[:,dim2]
+            x_train = x_train[idx]
+            y_train = y_train[idx]
+            z_train = z_train[idx]
+            xmin, xmax = -5, 5
+            ymin, ymax = -5, 5
+            xmajor, xminor = 2.5, 1.25
+            ymajor, yminor = 2.5, 1.25
+
+            ax = axs[i]
+            ax.xaxis.set_major_locator(ticker.MultipleLocator(xmajor))
+            ax.xaxis.set_minor_locator(ticker.MultipleLocator(xminor))
+            ax.yaxis.set_major_locator(ticker.MultipleLocator(ymajor))
+            ax.yaxis.set_minor_locator(ticker.MultipleLocator(yminor))
+            ax.set_xlim(xmin, xmax)
+            ax.set_ylim(ymin, ymax)
+            mappable = ax.scatter(x_train,y_train,c=z_train,s=1,cmap='Spectral')
+
+            xlabel = 'Z(%s)' % dim1
+            ylabel = 'Z(%s)' % dim2
+            ax.set_xlabel(xlabel, fontsize=16)
+            ax.set_ylabel(ylabel, fontsize=16)
+            if i <= 2:
+                ax.text(0.05, 0.9, 'Epoch-%s-withLFS' % epoch, transform=ax.transAxes, fontsize=14, fontweight='bold')
+            else:
+                ax.text(0.05, 0.9, 'Epoch-%s-withoutLFS' % epoch, transform=ax.transAxes, fontsize=14, fontweight='bold')
+
+
+        plt.tight_layout()
+        plt.show()
+    
+    def LFS_densityplot(self):
+        prop = json.load(open('../data/latent/pross.json','r'))
+        num = [0,40,99]
+        files = ['../data/latent/withlfs_vecs_epoch_%s' %i for i in num]
+        files += ['../data/latent/Without_lfs_vecs_epoch_%s' %i for i in num]
+        fig, axes = plt.subplots(2, 3, figsize=(20, 14))
+        
+        for i, file in enumerate(files):
+            epoch = file.split('_')[-1]
+            df = pd.read_csv(file, header=0)
+            df1 = df.iloc[:, 1:]
+            data = []
+            count = []
+            color = []
+
+            for j, mol_id in enumerate(df.iloc[:, 0]):
+                try:
+                    if prop[mol_id]['tot'] >= 5:
+                        data.append(prop[mol_id]['hs'])
+                        count.append(j)
+                except Exception as e:
+                    pass
+
+            scaler = StandardScaler().fit(df1)
+            train_data = scaler.transform(df1)
+            x_test = train_data[count]
+            dim1 = 0
+            dim2 = 5
+            x_train = train_data[:, dim1]
+            y_train = train_data[:, dim2]
+
+            for d in data:
+                color.append(float(d))
+
+            xmin, xmax = -5, 5
+            ymin, ymax = -5, 5
+            xmajor, xminor = 2.5, 1.25
+            ymajor, yminor = 2.5, 1.25
+
+            ax = axes.flatten()[i]  # Select the current subplot
+
+            # Set major and minor tick locators
+            ax.xaxis.set_major_locator(ticker.MultipleLocator(xmajor))
+            ax.xaxis.set_minor_locator(ticker.MultipleLocator(xminor))
+            ax.yaxis.set_major_locator(ticker.MultipleLocator(ymajor))
+            ax.yaxis.set_minor_locator(ticker.MultipleLocator(yminor))
+
+            ax.set_xlim(xmin, xmax)
+            ax.set_ylim(ymin, ymax)
+
+            ax.scatter(x_train, y_train, c='black', s=0.5, edgecolors='black', alpha=0.2)
+            mappable = ax.scatter(x_test[:, dim1], x_test[:, dim2], c=color, cmap='Spectral', s=5)
+
+            ax.set_xlabel('Z({})'.format(dim1), fontsize=16)
+            ax.set_ylabel('Z({})'.format(dim2), fontsize=16)
+            if i <= 2:
+                ax.text(0.05, 0.9, 'Epoch-%s-withLFS' % epoch, transform=ax.transAxes, fontsize=20, fontweight='bold')
+            else:
+                ax.text(0.05, 0.9, 'Epoch-%s-withoutLFS' % epoch, transform=ax.transAxes, fontsize=20, fontweight='bold')
+
+            # Create a colorbar for the current subplot
+        cax = fig.add_axes([0.92 + (i * 0.03), 0.15, 0.02, 0.7])  # Adjust the position and size of the colorbar
+        cbar = fig.colorbar(mappable, cax=cax)
+        cbar.set_label('LFS value', size=15)
+
+        plt.tight_layout()
         plt.show()
         
     def LFS_optimization(self,LFS_target,inputsmile='',step_size=0.06,sign=-1,max_cycle=100,train_file='../data/latent_train_epoch_99-2.csv'):
