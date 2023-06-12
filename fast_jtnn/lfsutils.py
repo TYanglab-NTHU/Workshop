@@ -13,7 +13,8 @@ from fast_jtnn.mol_tree import MolTree
 from fast_jtnn.jtprop_vae import JTPropVAE
 from torch.nn import CosineSimilarity
 from sklearn.preprocessing import StandardScaler
-import matplotlib.image as mpimg
+from matplotlib.pyplot import imshow, axis,figure
+from IPython.display import display
 import pandas as pd
 import numpy as np
 from scipy.stats import gaussian_kde
@@ -121,7 +122,7 @@ class LigandGenerator():
                 count = 0
         return decode_smiles_set
     
-   
+
     def LFS_metric(self):
         data = [
         ['H\u2082O', '0.943', 'Weak'],
@@ -144,45 +145,77 @@ class LigandGenerator():
         styled_df = df.style.apply(highlight_strength, axis=None)
         return styled_df
     
-    def scatter_plot(self,df,smi,p,dim1=0, dim2=1):
-        mol = Chem.MolFromSmiles(smi)
-        img = Draw.MolsToGridImage([mol],molsPerRow=1)
-        png = img.data
-        with open(os.path.join('../','data','%s.png'%smi),'wb+') as outf:
-            outf.write(png)
-        image = Image.open(os.path.join('../','data','%s.png'%smi))
-        fig, axes = plt.subplots(1,2, figsize=(8, 6))  # (rows, columns, figsize)
-        self.get_latent()
-        xmin, xmax = -5, 5
-        ymin, ymax = -5, 5
-        xmajor, xminor = 2.5, 1.25
-        ymajor, yminor = 2.5, 1.25
-        df = pd.DataFrame(df)
-        train_data = self.scaler.transform(df)
-    
-        xlabel = 'Z(%s)' % dim1
-        ylabel = 'Z(%s)' % dim2
-        axes[0].set_position([0.1, 0.1,0.8, 1.0])  # [left, bottom, width, height]
-        axes[1].set_position([1, 0.5, 0.3, 0.4])  # [left, bottom, width, height]
-        axes[1].imshow(image)  # 第二個子圖的資料
-        axes[1].text(0.5, 1.0, '%.2f' %(p), horizontalalignment='center', verticalalignment='bottom', transform=axes[1].transAxes, fontsize=16)
-        # for i in ['top', 'bottom', 'left', 'right']:
-        #     axes[1].spines[i].set_visible(0)
-        axes[1].axis('off')
-        axes[0].scatter(self.x_train, self.y_train, c='black', s=0.5, edgecolors='black', alpha=0.2)
-        axes[0].scatter(train_data[0][dim1],train_data[0][dim2],c='orange', s=30, edgecolors='black', alpha=1)
+    def show_parity_plot(self):
+        image_path = '../data/latent/parityplot.png'
+        pil_im = Image.open(image_path)
 
-        axes[0].xaxis.set_major_locator(ticker.MultipleLocator(xmajor))
-        axes[0].xaxis.set_minor_locator(ticker.MultipleLocator(xminor))
-        axes[0].yaxis.set_major_locator(ticker.MultipleLocator(ymajor))
-        axes[0].yaxis.set_minor_locator(ticker.MultipleLocator(yminor))
-        plt.xticks(fontsize=16)
-        plt.yticks(fontsize=16)
-        axes[0].set_xlim(xmin, xmax)
-        axes[0].set_ylim(ymin, ymax)
-        axes[0].set_xlabel(xlabel, fontsize=16)
-        axes[0].set_ylabel(ylabel, fontsize=16)
-        plt.show()
+        # Adjust figure size and DPI
+        fig = figure(figsize=(3, 3), dpi=400)
+        ax = fig.add_subplot(111)
+
+        # Display image
+        ax.imshow(pil_im)
+        axis('off')
+
+    def show_model_architecture(self):
+        image_path = '../data/latent/model_architecture.png'
+        pil_im = Image.open(image_path)
+
+        # Adjust figure size and DPI
+        fig = figure(figsize=(3, 3), dpi=400)
+        ax = fig.add_subplot(111)
+        
+        # Display image
+        ax.imshow(pil_im)
+        axis('off')
+
+    def scatter_plot(self,df_all,dim1=0, dim2=1):
+        df_all = np.array(df_all).T
+        for idx,df_ in enumerate(df_all):
+            smi = df_[0]
+            p = df_[2]
+            mol = Chem.MolFromSmiles(smi)
+            img = Draw.MolsToGridImage([mol],molsPerRow=1)
+            png = img.data
+            with open(os.path.join('../','data','%s.png'%smi),'wb+') as outf:
+                outf.write(png)
+            image = Image.open(os.path.join('../','data','%s.png'%smi))
+            fig, axes = plt.subplots(1,2, figsize=(8, 6))  # (rows, columns, figsize)
+            self.get_latent()
+            xmin, xmax = -5, 5
+            ymin, ymax = -5, 5
+            xmajor, xminor = 2.5, 1.25
+            ymajor, yminor = 2.5, 1.25
+            if idx != 0:
+                df_old = pd.DataFrame(df_all[idx-1][1])
+                train_data_old = self.scaler.transform(df_old)
+            df_new = pd.DataFrame(df_all[idx][1])
+            train_data = self.scaler.transform(df_new)
+            xlabel = 'Z(%s)' % dim1
+            ylabel = 'Z(%s)' % dim2
+            axes[0].set_position([0.1, 0.1,0.8, 1.0])  # [left, bottom, width, height]
+            axes[1].set_position([1, 0.5, 0.3, 0.4])  # [left, bottom, width, height]
+            axes[1].imshow(image)  # 第二個子圖的資料
+            axes[1].text(0.5, 1.0, '%.2f' %(p), horizontalalignment='center', verticalalignment='bottom', transform=axes[1].transAxes, fontsize=16)
+            # for i in ['top', 'bottom', 'left', 'right']:
+            #     axes[1].spines[i].set_visible(0)
+            axes[1].axis('off')
+            axes[0].scatter(self.x_train, self.y_train, c='black', s=0.5, edgecolors='black', alpha=0.2)
+            if idx != 0:
+                axes[0].scatter(train_data_old[0][dim1], train_data_old[0][dim2], c='blue', s=20, edgecolors='red', alpha=1)
+            axes[0].scatter(train_data[0][dim1],train_data[0][dim2],c='orange', s=30, edgecolors='black', alpha=1)
+
+            axes[0].xaxis.set_major_locator(ticker.MultipleLocator(xmajor))
+            axes[0].xaxis.set_minor_locator(ticker.MultipleLocator(xminor))
+            axes[0].yaxis.set_major_locator(ticker.MultipleLocator(ymajor))
+            axes[0].yaxis.set_minor_locator(ticker.MultipleLocator(yminor))
+            plt.xticks(fontsize=16)
+            plt.yticks(fontsize=16)
+            axes[0].set_xlim(xmin, xmax)
+            axes[0].set_ylim(ymin, ymax)
+            axes[0].set_xlabel(xlabel, fontsize=16)
+            axes[0].set_ylabel(ylabel, fontsize=16)
+            plt.show()
         
     def density_plot(self):
         num = [0,40,99]
@@ -305,7 +338,7 @@ class LigandGenerator():
         plt.tight_layout()
         plt.show()
         
-    def LFS_optimization(self,LFS_target,inputsmile='',step_size=0.06,sign=-1,max_cycle=100,train_file='../data/latent_train_epoch_99-2.csv'):
+    def LFS_optimization(self,LFS_target,inputsmile='',step_size=0.1,sign=-1,max_cycle=100,train_file='../data/latent_train_epoch_99-2.csv'):
         print('Running optimizaiotn...')
         # cos = CosineSimilarity(dim=1)
         df = pd.read_csv(train_file,header=None)
@@ -321,12 +354,6 @@ class LigandGenerator():
                 ploss_threshold = 0.05
                 # lfs = self.get_lfs_from_smi(inputsmile)
                 t = 0
-                # if abs(lfs - LFS_target) > 0.3:
-                #     print('\nWarning! Input smile lfs is %.3f, but target lfs is %s.\nPredict lfs might not be trust-worthy!'%(lfs,LFS_target))
-                #     checkpoint = input('Continue?[y/n]\n')
-                #     if checkpoint.lower() == 'n':
-                #         flag = False
-                #         break
                 while ploss > ploss_threshold and not math.isnan(ploss):
                     if count == 0:
                         z_tree_mean,z_mol_mean,tree_var,mol_var = self.get_vector(inputsmile)
@@ -342,7 +369,6 @@ class LigandGenerator():
                     lfs_new = self.model.propNN(torch.cat((z_tree_mean_new, z_mol_mean_new),dim=1))
                     lfs_new = torch.clamp(lfs_new,min=0,max=1).item()
                     ploss = abs(lfs_new - LFS_target)
-                    print(ploss)
                     delta_tree = sign * step_size * 2 * (lfs_new - LFS_target) * (lfs_new - lfs) / delta_tree / torch.sqrt(torch.Tensor([t+1]).cuda()) 
                     delta_mol = sign * step_size * 2 * (lfs_new - LFS_target) * (lfs_new - lfs) / delta_mol / torch.sqrt(torch.Tensor([t+1]).cuda()) 
                     # delta_tree = sign * step_size * ((lfs_new - lfs) / (z_tree_mean_new - z_tree_mean) * (1 + 2 * (lfs_new - LFS_target)) + 2 * (lfs_new - LFS_target) * (lfs - LFS_target) / (z_tree_mean_new - z_tree_mean)) # / torch.sqrt(torch.Tensor([t+1])) 
