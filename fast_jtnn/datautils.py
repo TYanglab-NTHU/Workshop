@@ -1,7 +1,6 @@
 import torch
 import sys,json
 import time
-import timeout_decorator
 from torch.utils.data import Dataset, DataLoader
 from .mol_tree import *
 import numpy as np
@@ -11,7 +10,6 @@ from .jtmpn import JTMPN
 import pickle as pickle
 import os, random
 import torch.utils.data.distributed
-import horovod.torch as hvd
 
 
 class MolTreeFolder(object):
