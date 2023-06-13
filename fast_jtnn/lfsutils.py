@@ -145,17 +145,45 @@ class LigandGenerator():
         styled_df = df.style.apply(highlight_strength, axis=None)
         return styled_df
     
-    def show_parity_plot(self):
-        image_path = '../data/latent/parityplot.png'
-        pil_im = Image.open(image_path)
+    def show_parity_plot(self,df):
+        y1_lfs = df['lfs_pred']
+        x1_lfs = df['lfs_true']  
+        lfs_rmse1 = np.sqrt(np.mean((x1_lfs-y1_lfs)**2))
+        lfs_mae_1 = np.mean(abs(x1_lfs-y1_lfs))
+        fig, ax = plt.subplots(figsize=(6,6))
+        # print(f)
+        target = 'lfs'
+        xmin, xmax = -0.005,1.005
+        ymin, ymax = -0.005,1.005
+        xmajor, xminor = 0.25,0.125
+        ymajor, yminor = 0.25,0.125
+        xlabel, ylabel = '%s$_{true}$'%(str.upper(target)),'%s$_{predict}$' %(str.upper(target))
 
-        # Adjust figure size and DPI
-        fig = figure(figsize=(3, 3), dpi=400)
-        ax = fig.add_subplot(111)
+        ax.xaxis.set_major_locator(ticker.MultipleLocator(xmajor))
+        ax.xaxis.set_minor_locator(ticker.MultipleLocator(xminor))
+        ax.yaxis.set_major_locator(ticker.MultipleLocator(ymajor))
+        ax.yaxis.set_minor_locator(ticker.MultipleLocator(yminor))
+        ax.xaxis.set_tick_params(labelsize=16)
+        ax.yaxis.set_tick_params(labelsize=16)
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+        ax.set_xlabel(xlabel, fontsize=18)
+        ax.set_ylabel(ylabel, fontsize=18)
+        ## find the boundaries of X and Y values
+        # Ensure the aspect ratio is square
+        # ax.set_aspect("equal", adjustable="box")
+        # rmse2 = np.sqrt(np.mean((x2-y2)**2))
+        # mae_2 = np.mean(abs(x2-y2))
 
-        # Display image
-        ax.imshow(pil_im)
-        axis('off')
+        dist = [[0,5],[0,5]]
+        #string = '\n'.join(('train RMSE %.3f'%rmse1)),'test RMSE %.3f'%rmse2))
+        string = 'train RMSE %.3f \ntrain MAE   %.3f'%(lfs_rmse1,lfs_mae_1)#%(rmse1,rmse2,mae_1,mae_2)
+        props = dict(boxstyle='round', facecolor='white', alpha=0.8)
+        ax.text(0.05, 0.95, string, transform=ax.transAxes, fontsize=10,
+                verticalalignment='top',bbox=props)
+        ax.scatter(x1_lfs,y1_lfs,c='royalblue',edgecolors='black',label='train')
+        # ax.scatter(x2,y2,c='red',edgecolors='black',label='test')
+        ax.plot([0, 1], [0, 1], "--",lw=2,c = 'black',transform=ax.transAxes)        
 
     def show_model_architecture(self):
         image_path = '../data/latent/model_architecture.png'
@@ -300,6 +328,14 @@ class LigandGenerator():
             dim2 = 5
             x_train = train_data[:, dim1]
             y_train = train_data[:, dim2]
+            xy = np.vstack([train_data[:,dim1],train_data[:,dim2]])
+            z_train = gaussian_kde(xy)(xy)
+            idx = z_train.argsort()
+            x_train = train_data[:,dim1]
+            y_train = train_data[:,dim2]
+            x_train = x_train[idx]
+            y_train = y_train[idx]
+            z_train = z_train[idx]
 
             for d in data:
                 color.append(float(d))
@@ -319,6 +355,7 @@ class LigandGenerator():
 
             ax.set_xlim(xmin, xmax)
             ax.set_ylim(ymin, ymax)
+            ax.tricontour(x_train, y_train, z_train,colors='k',alpha=0.3)
 
             ax.scatter(x_train, y_train, c='black', s=0.5, edgecolors='black', alpha=0.2)
             mappable = ax.scatter(x_test[:, dim1], x_test[:, dim2], c=color, cmap='Spectral', s=5)
