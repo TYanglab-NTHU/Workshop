@@ -122,34 +122,10 @@ class LigandGenerator():
                 count = 0
         return decode_smiles_set
     
-
-    def LFS_metric(self):
-        data = [
-        ['H\u2082O', '0.943', 'Weak'],
-        ['Cl\u207B', '0.917', 'Weak'],
-        ['OH\u207B', '0.889', 'Weak'],
-        ['phen', '0.85', 'Strong'],
-        ['\u2013N=C=S', '0.786', 'Weak'],
-        ['F\u207B', '0.528', 'Weak'],
-        ['MeCN', '0.484', 'Intermediate'],
-        ['Py', '0.639', 'Intermediate'],
-        ['en', '0.429', 'Strong'],
-        ['N\u2083\u207B', '0.420', 'Weak'],
-        ['CO', '0.202', 'Strong'],
-        ['NH\u2083', '0.077', 'Strong'],
-        ['\u2013NO\u2082', '0.045', 'Strong'],
-        ['PPh\u2083', '0.029', 'Strong'],
-        ['CN\u207B', '0', 'Strong']
-        ]
-        df = pd.DataFrame(data, columns=['', 'LFS metric', 'Spectrochemical series'])
-        styled_df = df.style.apply(highlight_strength, axis=None)
-        return styled_df
     
-    def show_parity_plot(self,df):
-        y1_lfs = df['lfs_pred']
-        x1_lfs = df['lfs_true']  
-        lfs_rmse1 = np.sqrt(np.mean((x1_lfs-y1_lfs)**2))
-        lfs_mae_1 = np.mean(abs(x1_lfs-y1_lfs))
+    def show_parity_plot(self,lfs_predict,lfs_metric):
+        lfs_rmse1 = np.sqrt(np.mean((lfs_predict-lfs_metric)**2))
+        lfs_mae_1 = np.mean(abs(lfs_predict-lfs_metric))
         fig, ax = plt.subplots(figsize=(6,6))
         # print(f)
         target = 'lfs'
@@ -181,7 +157,7 @@ class LigandGenerator():
         props = dict(boxstyle='round', facecolor='white', alpha=0.8)
         ax.text(0.05, 0.95, string, transform=ax.transAxes, fontsize=10,
                 verticalalignment='top',bbox=props)
-        ax.scatter(x1_lfs,y1_lfs,c='royalblue',edgecolors='black',label='train')
+        ax.scatter(lfs_metric,lfs_predict,c='royalblue',edgecolors='black',label='train')
         # ax.scatter(x2,y2,c='red',edgecolors='black',label='test')
         ax.plot([0, 1], [0, 1], "--",lw=2,c = 'black',transform=ax.transAxes)        
 
@@ -230,8 +206,8 @@ class LigandGenerator():
             axes[1].axis('off')
             axes[0].scatter(self.x_train, self.y_train, c='black', s=0.5, edgecolors='black', alpha=0.2)
             if idx != 0:
-                axes[0].scatter(train_data_old[0][dim1], train_data_old[0][dim2], c='blue', s=20, edgecolors='red', alpha=1)
-            axes[0].scatter(train_data[0][dim1],train_data[0][dim2],c='orange', s=30, edgecolors='black', alpha=1)
+                axes[0].scatter(train_data_old[0][dim1], train_data_old[0][dim2], c='grey', s=20, edgecolors='black', alpha=1)
+            axes[0].scatter(train_data[0][dim1],train_data[0][dim2],c='blue', s=30, edgecolors='black', alpha=1)
 
             axes[0].xaxis.set_major_locator(ticker.MultipleLocator(xmajor))
             axes[0].xaxis.set_minor_locator(ticker.MultipleLocator(xminor))
@@ -355,7 +331,7 @@ class LigandGenerator():
 
             ax.set_xlim(xmin, xmax)
             ax.set_ylim(ymin, ymax)
-            ax.tricontour(x_train, y_train, z_train,colors='k',alpha=0.3)
+            ax.tricontour(x_train, y_train, z_train,colors='k',alpha=0.3,linestyles='dotted')
 
             ax.scatter(x_train, y_train, c='black', s=0.5, edgecolors='black', alpha=0.2)
             mappable = ax.scatter(x_test[:, dim1], x_test[:, dim2], c=color, cmap='Spectral', s=5)
